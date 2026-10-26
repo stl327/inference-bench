@@ -276,10 +276,23 @@ async def main():
         print(f"{name:<11} {len(ok):>2}/{len(pr):<2} "
               f"{(f'{ttft:.2f}s' if ttft else '-'):>9} {(f'{tps:.0f}' if tps else '-'):>10} "
               f"{checks:>3}/{len(ok):<3} {(str(rtok) if rtok else '-'):>10} {cost:>8.4f}")
-    errs = [r for r in rows if r["error"]]
-    for r in errs[:10]:
-        print(f"  ! {r['provider']}/{r['test']}: {r['error']} {r['http_status'] or ''} "
-              f"{(r['error_detail'] or '')[:150]}")
+    # Errors: one line per provider + error type, with a count and a flattened sample.
+    seen = {}
+    for r in rows:
+        if r["error"]:
+            key = (r["provider"], r["error"], r["http_status"])
+            seen.setdefault(key, [0, r])[0] += 1
+    for (prov, err, code), (n, r) in seen.items():
+        detail = " ".join((r["error_detail"] or "").split())[:160]
+        print(f"  ! {prov}: {n}x {err} {code or ''} {detail}")
+    # Failed correctness checks, so harness bugs vs. real provider misses are visible.
+    for r in rows:
+        if not r["error"] and not r.get("check_pass"):
+            flags = {k: r[k] for k in ("schema_valid", "fields_correct", "tool_called",
+                                       "tool_name_ok", "tool_args_ok", "check_detail")
+                     if k in r}
+            preview = " ".join((r.get("answer_preview") or "").split())[:100]
+            print(f"  x {r['provider']}/{r['test']}: finish={r['finish_reason']} {flags} {preview!r}")
 
 
 if __name__ == "__main__":
