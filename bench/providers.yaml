@@ -1,0 +1,70 @@
+# Providers under test. Every provider serves the same model (gpt-oss-120b) with
+# the same reasoning effort so the comparison is apples to apples.
+#
+# Prices are USD per 1M tokens, used only to compute cost per request.
+# VERIFY each against the provider's pricing page before the real week starts.
+#
+# `extra` is merged into the request body as-is (reasoning effort, routing, etc.).
+
+model_label: gpt-oss-120b
+
+providers:
+  together:
+    base_url: https://api.together.xyz/v1
+    model: openai/gpt-oss-120b
+    key_env: TOGETHER_API_KEY
+    price_in: 0.15
+    price_out: 0.60
+    extra:
+      reasoning_effort: medium
+
+  fireworks:
+    base_url: https://api.fireworks.ai/inference/v1
+    model: accounts/fireworks/models/gpt-oss-120b
+    key_env: FIREWORKS_API_KEY
+    price_in: 0.15
+    price_out: 0.60
+    extra:
+      reasoning_effort: medium
+
+  baseten:
+    base_url: https://inference.baseten.co/v1
+    model: openai/gpt-oss-120b
+    key_env: BASETEN_API_KEY
+    price_in: 0.10
+    price_out: 0.50
+    extra:
+      reasoning_effort: medium
+
+  deepinfra:
+    base_url: https://api.deepinfra.com/v1/openai
+    model: openai/gpt-oss-120b
+    key_env: DEEPINFRA_API_KEY
+    price_in: 0.05
+    price_out: 0.45
+    extra:
+      reasoning_effort: medium
+
+  cerebras:
+    base_url: https://api.cerebras.ai/v1
+    model: gpt-oss-120b
+    key_env: CEREBRAS_API_KEY
+    price_in: 0.35
+    price_out: 0.75
+    extra:
+      reasoning_effort: medium
+
+  # OpenRouter is pinned to one upstream (Together) with fallbacks off, so the
+  # difference vs. calling Together directly is the routing overhead.
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    model: openai/gpt-oss-120b
+    key_env: OPENROUTER_API_KEY
+    price_in: 0.15
+    price_out: 0.60
+    extra:
+      reasoning:
+        effort: medium
+      provider:
+        order: [together]
+        allow_fallbacks: false
