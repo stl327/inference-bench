@@ -90,7 +90,7 @@ async def one_request(name: str, prov: dict, spec: dict, meta: dict) -> dict:
     t0 = time.perf_counter()
     first_any = first_answer = last_tok = None
     text_parts, tools = [], {}
-    usage, finish, chunks, upstream = None, None, 0, None
+    usage, finish, chunks = None, None, 0
     status, error, error_detail = None, None, None
 
     try:
@@ -120,8 +120,6 @@ async def one_request(name: str, prov: dict, spec: dict, meta: dict) -> dict:
                             break
                         if evt.get("usage"):
                             usage = evt["usage"]
-                        if isinstance(evt.get("provider"), str):
-                            upstream = evt["provider"]  # OpenRouter names the upstream it used
                         for ch in evt.get("choices") or []:
                             d = ch.get("delta") or {}
                             now = time.perf_counter()
@@ -170,7 +168,6 @@ async def one_request(name: str, prov: dict, spec: dict, meta: dict) -> dict:
         "error": error,
         "error_detail": error_detail,
         "finish_reason": finish,
-        "upstream": upstream,
         "truncated": finish == "length",
         "ttft_s": round(first_any - t0, 4) if first_any else None,      # first token of any kind
         "ttfa_s": round(first_answer - t0, 4) if first_answer else None,  # first visible answer token
