@@ -42,6 +42,10 @@ QUERIES = {
     "Correctness (structured output, tool calling, long-context needle)": """
         SELECT provider, test, count(*) FILTER (WHERE error IS NULL) AS n_ok,
           round(100.0 * avg(CAST(check_pass AS INT)) FILTER (WHERE error IS NULL), 1) AS pass_pct,
+          round(100.0 * avg(CASE WHEN json_strict = false THEN 1 ELSE 0 END)
+                FILTER (WHERE error IS NULL AND test = 'structured'), 1) AS json_not_enforced_pct,
+          round(100.0 * avg(CASE WHEN fields_correct = false THEN 1 ELSE 0 END)
+                FILTER (WHERE error IS NULL AND test = 'structured'), 1) AS wrong_values_pct,
           round(100.0 * avg(CAST(truncated AS INT)), 1) AS truncated_pct
         FROM r WHERE test IN ('structured', 'tool', 'long')
         GROUP BY ALL ORDER BY test, pass_pct DESC
@@ -79,6 +83,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", default="data/results")
     ap.add_argument("--out", default="analysis")
+    ap.add_argument("--since", help="only include rows at/after this UTC time, e.g. 2026-10-26T04:00")
     args = ap.parse_args()
 
     out = Path(args.out)
@@ -86,10 +91,12 @@ def main():
     con = duckdb.connect()
     con.execute("SET TimeZone = 'UTC'")
     con.execute(f"""
-        CREATE VIEW r AS SELECT * FROM read_json_auto(
+        CREATE VIEW raw AS SELECT * FROM read_json_auto(
           '{args.results}/**/*.jsonl', format='newline_delimited',
           union_by_name=true, ignore_errors=true)
     """)
+    where = f"WHERE CAST(ts_utc AS TIMESTAMPTZ) >= TIMESTAMPTZ '{args.since}+00'" if args.since else ""
+    con.execute(f"CREATE VIEW r AS SELECT * FROM raw {where}")
     n, runs = con.execute("SELECT count(*), count(DISTINCT run_id) FROM r").fetchone()
     lo, hi = con.execute("SELECT min(ts_utc)::VARCHAR, max(ts_utc)::VARCHAR FROM r").fetchone()
 

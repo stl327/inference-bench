@@ -288,7 +288,7 @@ async def main():
     # Failed correctness checks, so harness bugs vs. real provider misses are visible.
     for r in rows:
         if not r["error"] and not r.get("check_pass"):
-            flags = {k: r[k] for k in ("schema_valid", "fields_correct", "tool_called",
+            flags = {k: r[k] for k in ("json_strict", "schema_valid", "fields_correct", "tool_called",
                                        "tool_name_ok", "tool_args_ok", "check_detail")
                      if k in r}
             preview = " ".join((r.get("answer_preview") or "").split())[:100]

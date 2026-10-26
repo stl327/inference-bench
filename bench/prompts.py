@@ -116,10 +116,23 @@ def structured(rng):
     )
 
     def check(text, tools):
+        # check_pass is strict: the whole response must be one schema-valid object
+        # with correct values (that's what json_schema mode promises). If the strict
+        # parse fails, also try the leading JSON object, so the analysis can separate
+        # "format not enforced" from "wrong values".
+        strict = True
         try:
             obj = json.loads(text)
         except Exception:
-            return {"check_pass": False, "schema_valid": False, "check_detail": "not JSON"}
+            strict = False
+            try:
+                obj, _ = json.JSONDecoder().raw_decode(text.lstrip())
+            except Exception:
+                return {"check_pass": False, "json_strict": False, "json_extractable": False,
+                        "schema_valid": False, "check_detail": "not JSON"}
+        if not isinstance(obj, dict):
+            return {"check_pass": False, "json_strict": strict, "json_extractable": True,
+                    "schema_valid": False, "check_detail": "not an object"}
         try:
             import jsonschema
             jsonschema.validate(obj, TICKET_SCHEMA)
@@ -127,8 +140,11 @@ def structured(rng):
         except Exception:
             valid = False
         correct = all(obj.get(k) == v for k, v in truth.items())
-        return {"check_pass": valid and correct, "schema_valid": valid,
-                "fields_correct": correct}
+        out = {"check_pass": strict and valid and correct, "json_strict": strict,
+               "json_extractable": True, "schema_valid": valid, "fields_correct": correct}
+        if not strict:
+            out["check_detail"] = "extra text after JSON object"
+        return out
 
     return {
         "test": "structured",
