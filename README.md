@@ -54,7 +54,7 @@ Every prompt starts with a random request ID, so no provider can serve a cached 
 ## Local dry run
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-analysis.txt
 export TOGETHER_API_KEY=...   # etc.
 python bench/run.py --tests short,tool        # quick, cheap
 python bench/run.py --long                    # full suite incl. 32K context

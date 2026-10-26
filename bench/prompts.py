@@ -82,7 +82,7 @@ def medium_chat(rng):
         "messages": [{"role": "user", "content": nonce_line() +
                       "Here are cluster logs:\n\n" + logs +
                       "\n\nSummarize the notable incidents in about 400 words, grouped by service."}],
-        "max_tokens": 2000,
+        "max_tokens": 4096,
         "timeout": 120,
         "check": lambda text, tools: {"check_pass": len(text.split()) >= 100},
     }

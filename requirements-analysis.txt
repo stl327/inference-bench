@@ -1,0 +1,4 @@
+# Only needed locally for bench/analyze.py
+duckdb==2.0.0
+pandas==3.0.6
+pytz==2026.5

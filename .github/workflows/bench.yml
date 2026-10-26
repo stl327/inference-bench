@@ -53,11 +53,14 @@ jobs:
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          # Inputs go through env vars, never pasted into the script text.
+          INPUT_LONG: ${{ inputs.long }}
+          INPUT_ONLY: ${{ inputs.only }}
         run: |
-          ARGS="--out-dir data/results"
-          if [ "${{ inputs.long }}" = "true" ]; then ARGS="$ARGS --long"; fi
-          if [ -n "${{ inputs.only }}" ]; then ARGS="$ARGS --only ${{ inputs.only }}"; fi
-          python bench/run.py $ARGS
+          ARGS=(--out-dir data/results)
+          if [ "$INPUT_LONG" = "true" ]; then ARGS+=(--long); fi
+          if [ -n "$INPUT_ONLY" ]; then ARGS+=(--only "$INPUT_ONLY"); fi
+          python bench/run.py "${ARGS[@]}"
 
       # always(): results are saved even when the run flags alerts (exit code 2).
       - name: Commit results to data branch
