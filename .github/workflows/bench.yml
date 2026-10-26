@@ -52,13 +52,16 @@ jobs:
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
           ARGS="--out-dir data/results"
           if [ "${{ inputs.long }}" = "true" ]; then ARGS="$ARGS --long"; fi
           if [ -n "${{ inputs.only }}" ]; then ARGS="$ARGS --only ${{ inputs.only }}"; fi
           python bench/run.py $ARGS
 
+      # always(): results are saved even when the run flags alerts (exit code 2).
       - name: Commit results to data branch
+        if: always()
         working-directory: data
         run: |
           git config user.name "bench-bot"

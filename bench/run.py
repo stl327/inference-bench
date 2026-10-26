@@ -294,6 +294,65 @@ async def main():
             preview = " ".join((r.get("answer_preview") or "").split())[:100]
             print(f"  x {r['provider']}/{r['test']}: finish={r['finish_reason']} {flags} {preview!r}")
 
+    alerts = find_alerts(rows, providers, missing)
+    if alerts:
+        print("\nALERTS:\n" + "\n".join(f"  * {a}" for a in alerts))
+        notify(alerts, meta)
+        return 2  # fail the job so GitHub's failed-run email fires too
+    return 0
+
+
+# ------------------------------------------------------------ alerting
+
+# Operational problems alert immediately. Ordinary check failures are the data
+# being measured (e.g. Together leaking text after JSON), so they only alert when
+# a provider fails *every* request of a test type in one run, which points to a
+# breaking change, not normal variance. For the structured test, only wrong or
+# unparseable values count; a format leak with correct values does not.
+ERROR_RATE_ALERT = 0.25
+
+
+def find_alerts(rows, providers, missing) -> list[str]:
+    alerts = [f"{p}: API key secret not set, provider skipped" for p in missing]
+    for name in providers:
+        pr = [r for r in rows if r["provider"] == name]
+        errs = [r for r in pr if r["error"]]
+        kinds = sorted({r["error"] for r in errs})
+        if any(k in ("auth", "billing") for k in kinds):
+            alerts.append(f"{name}: {', '.join(kinds)} errors. Check the key or remaining credits")
+        elif pr and len(errs) / len(pr) >= ERROR_RATE_ALERT:
+            alerts.append(f"{name}: {len(errs)}/{len(pr)} requests failed ({', '.join(kinds)})")
+
+        for test in sorted({r["test"] for r in pr}):
+            ok = [r for r in pr if r["test"] == test and not r["error"]]
+            if not ok:
+                continue
+            if test == "structured":
+                bad = [r for r in ok if not (r.get("json_extractable") and r.get("fields_correct"))]
+            else:
+                bad = [r for r in ok if not r.get("check_pass")]
+            if test in ("structured", "tool", "long") and len(bad) == len(ok):
+                alerts.append(f"{name}: failed all {len(ok)} '{test}' checks this run")
+    return alerts
+
+
+def notify(alerts, meta):
+    """Push to ntfy.sh if NTFY_TOPIC is set. Never fails the run itself."""
+    topic = os.environ.get("NTFY_TOPIC")
+    if not topic:
+        return
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    run = os.environ.get("GITHUB_RUN_ID", "")
+    headers = {"Title": f"inference-bench: {len(alerts)} issue(s)", "Tags": "warning",
+               "Priority": "default"}
+    if repo and run:
+        headers["Click"] = f"https://github.com/{repo}/actions/runs/{run}"
+    try:
+        httpx.post(f"https://ntfy.sh/{topic}", content="\n".join(alerts).encode(),
+                   headers=headers, timeout=10)
+    except Exception as e:
+        print(f"ntfy notify failed: {e}", file=sys.stderr)
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))
