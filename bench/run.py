@@ -90,7 +90,7 @@ async def one_request(name: str, prov: dict, spec: dict, meta: dict) -> dict:
     t0 = time.perf_counter()
     first_any = first_answer = last_tok = None
     text_parts, tools = [], {}
-    usage, finish, chunks = None, None, 0
+    usage, finish, chunks, upstream = None, None, 0, None
     status, error, error_detail = None, None, None
 
     try:
@@ -120,6 +120,8 @@ async def one_request(name: str, prov: dict, spec: dict, meta: dict) -> dict:
                             break
                         if evt.get("usage"):
                             usage = evt["usage"]
+                        if isinstance(evt.get("provider"), str):
+                            upstream = evt["provider"]  # OpenRouter names the upstream it used
                         for ch in evt.get("choices") or []:
                             d = ch.get("delta") or {}
                             now = time.perf_counter()
@@ -168,6 +170,7 @@ async def one_request(name: str, prov: dict, spec: dict, meta: dict) -> dict:
         "error": error,
         "error_detail": error_detail,
         "finish_reason": finish,
+        "upstream": upstream,
         "truncated": finish == "length",
         "ttft_s": round(first_any - t0, 4) if first_any else None,      # first token of any kind
         "ttfa_s": round(first_answer - t0, 4) if first_answer else None,  # first visible answer token
@@ -304,12 +307,11 @@ async def main():
 
 # ------------------------------------------------------------ alerting
 
-# Operational problems alert immediately. Ordinary check failures are the data
-# being measured (e.g. Together leaking text after JSON), so they only alert when
-# a provider fails *every* request of a test type in one run, which points to a
-# breaking change, not normal variance. For the structured test, only wrong or
-# unparseable values count; a format leak with correct values does not.
-ERROR_RATE_ALERT = 0.25
+# Alerts are only for problems with the *harness or accounts*: a bad key, credits
+# running out, a missing secret, or a provider failing nearly everything (an outage
+# worth knowing about live). Rate limits, partial errors and failed checks are the
+# data being measured, so they are recorded but never alert.
+OUTAGE_RATE_ALERT = 0.75
 
 
 def find_alerts(rows, providers, missing) -> list[str]:
@@ -320,19 +322,8 @@ def find_alerts(rows, providers, missing) -> list[str]:
         kinds = sorted({r["error"] for r in errs})
         if any(k in ("auth", "billing") for k in kinds):
             alerts.append(f"{name}: {', '.join(kinds)} errors. Check the key or remaining credits")
-        elif pr and len(errs) / len(pr) >= ERROR_RATE_ALERT:
+        elif pr and len(errs) / len(pr) >= OUTAGE_RATE_ALERT:
             alerts.append(f"{name}: {len(errs)}/{len(pr)} requests failed ({', '.join(kinds)})")
-
-        for test in sorted({r["test"] for r in pr}):
-            ok = [r for r in pr if r["test"] == test and not r["error"]]
-            if not ok:
-                continue
-            if test == "structured":
-                bad = [r for r in ok if not (r.get("json_extractable") and r.get("fields_correct"))]
-            else:
-                bad = [r for r in ok if not r.get("check_pass")]
-            if test in ("structured", "tool", "long") and len(bad) == len(ok):
-                alerts.append(f"{name}: failed all {len(ok)} '{test}' checks this run")
     return alerts
 
 
