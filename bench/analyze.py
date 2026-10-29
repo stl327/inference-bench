@@ -90,11 +90,20 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
     con.execute("SET TimeZone = 'UTC'")
-    con.execute(f"""
-        CREATE VIEW raw AS SELECT * FROM read_json_auto(
-          '{args.results}/**/*.jsonl', format='newline_delimited',
-          union_by_name=true, ignore_errors=true)
-    """)
+    # Load rows in Python, then hand DuckDB one table. Reading hundreds of small
+    # JSONL files directly makes DuckDB allocate a large buffer per file, which
+    # runs out of memory once a week of runs (~340 files) has accumulated.
+    import json
+    import pandas as pd
+    records = []
+    for f in sorted(Path(args.results).glob("**/*.jsonl")):
+        with f.open() as fh:
+            records.extend(json.loads(line) for line in fh if line.strip())
+    if not records:
+        raise SystemExit(f"no results found under {args.results}")
+    df_raw = pd.DataFrame.from_records(records)
+    con.register("raw_df", df_raw)
+    con.execute("CREATE VIEW raw AS SELECT * FROM raw_df")
     where = f"WHERE CAST(ts_utc AS TIMESTAMPTZ) >= TIMESTAMPTZ '{args.since}+00'" if args.since else ""
     con.execute(f"CREATE VIEW r AS SELECT * FROM raw {where}")
     n, runs = con.execute("SELECT count(*), count(DISTINCT run_id) FROM r").fetchone()
