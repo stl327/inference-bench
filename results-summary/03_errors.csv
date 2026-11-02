@@ -1,0 +1,15 @@
+provider,error,n
+baseten,server_error,17
+baseten,rate_limited,5
+baseten,stream_error,3
+baseten,timeout,2
+cerebras,rate_limited,28
+cerebras,empty_output,1
+deepinfra,rate_limited,461
+deepinfra,empty_output,20
+openrouter,server_error,27
+openrouter,rate_limited,3
+openrouter,network,2
+openrouter,stream_error,1
+together,server_error,36
+together,stream_error,1

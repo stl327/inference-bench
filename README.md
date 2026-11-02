@@ -1,12 +1,98 @@
 # inference-bench
 
-A week-long benchmark of serverless inference providers serving the same open-weight model (gpt-oss-120b, reasoning effort medium). Every 30 minutes, a GitHub Actions job sends an identical request set to each provider in parallel and logs latency, throughput, errors, correctness and cost.
+A week-long benchmark of six serverless inference providers serving the same open-weight model, **gpt-oss-120b**. From October 26 to November 1, 2026, a GitHub Actions job sent an identical set of requests to each provider every 30 minutes and logged latency, throughput, errors, correctness and cost.
 
-Providers: Together, Fireworks, Baseten, DeepInfra, Cerebras, and OpenRouter (pinned to Together, fallbacks off).
+**Providers:** Together, Fireworks, Baseten, DeepInfra, Cerebras, and OpenRouter (pinned to Together with fallbacks off, to measure routing overhead).
 
-## What each run sends (per provider)
+**Scale:** 338 runs, 29,064 requests (4,844 per provider), $17.68 total API spend.
 
-| Test | Shape | Count | Graded on |
+The study is finished; the schedule and API keys are gone. Everything needed to reproduce it is in this repo.
+
+## Results
+
+### Structured output: the headline finding
+
+The same JSON-schema request (`response_format: json_schema`, `strict: true`, `additionalProperties: false`), about 1,000 times per provider:
+
+| Provider | Correct | Wrong values | Text after the JSON object |
+|---|---|---|---|
+| Fireworks | 100% | 0 / 1,014 | 0 |
+| Baseten | 100% | 0 / 1,007 | 0 |
+| Cerebras | 100% | 0 / 1,008 | 0 |
+| DeepInfra | 63% | 270 / 910 (30%) | 7% |
+| Together | 16% | 135 / 1,006 (13%) | 72% |
+| OpenRouter → Together | 20% | 123 / 1,008 (12%) | 70% |
+
+Every wrong value had the same shape: the correct digits followed by extra zeros (8 → 80, 16 → 1600, 64 → 640, 128 → 1280, 256 → 2560). The other fields were always right, and the output still passes schema validation, so an application can't detect the error.
+
+A follow-up repro ([`bench/repro_structured.py`](bench/repro_structured.py)) isolated the trigger. On these two endpoints, the schema is only reliable when it's also described in the prompt, which Together's docs recommend:
+
+| Provider | Schema also in system prompt | Schema only in `response_format` |
+|---|---|---|
+| Together | 100 / 100 correct | 9 / 100 correct |
+| DeepInfra | 52 / 52 correct | 35 / 62 correct |
+
+Results were the same with and without streaming. Fireworks, Baseten and Cerebras returned correct output without the prompt hint. Both affected providers were sent these findings before publication.
+
+Tool calling was 100% correct on every provider, and the 32K-token needle test was 100% on every provider except Fireworks (99%, one miss).
+
+### Speed and cost
+
+Short test, ~4,800 requests per provider. "Answer" is the time to the first visible answer token, after any reasoning.
+
+| Provider | Answer p50 | Answer p99 | Output tok/s (p50) | Effective $ / M tokens |
+|---|---|---|---|---|
+| Cerebras | 0.25 s | 1.6 s | 1,591 | 0.48 |
+| Fireworks | 0.47 s | 1.5 s | 240 | 0.29 |
+| Baseten | 0.51 s | 1.4 s | 197 | 0.22 |
+| Together | 0.82 s | 2.6 s | 101 | 0.30 |
+| OpenRouter → Together | 0.87 s | 2.8 s | 100 | 0.30 |
+| DeepInfra | 2.77 s | 10.6 s | 42 | 0.19 |
+
+### Reliability
+
+No retries, so every failed request counts. "Runs hit" is the number of runs (of 338) with at least one failed request.
+
+| Provider | Error rate | Runs hit | Main failure mode |
+|---|---|---|---|
+| Fireworks | 0.00% | 0 | none |
+| Baseten | 0.56% | 3 | bursts of 5xx and 429 |
+| Cerebras | 0.60% | 7 | "high traffic" 429s |
+| OpenRouter → Together | 0.68% | 8 | inherited Together's outages |
+| Together | 0.76% | 8 | one full outage (14 of 14 failed) |
+| DeepInfra | 9.93% | 99 | "Model busy" 429s (`engine_overloaded`) |
+
+Load was about one request at a time per provider, so these reflect provider capacity, not account rate limits.
+
+### Load: weekday vs. weekend
+
+Median output tok/s on the short test during US business hours (8 AM–4 PM Pacific):
+
+| Provider | Weekday | Weekend | Change |
+|---|---|---|---|
+| Together | 89 | 127 | +43% |
+| Fireworks | 205 | 252 | +23% |
+| Baseten | 162 | 198 | +22% |
+| DeepInfra | 37 | 39 | +5% |
+| Cerebras | 1,587 | 1,573 | −1% |
+
+This rests on a single weekend (which included Halloween), so treat it as directional.
+
+Full tables, including percentiles per test, errors by type and TTFT by hour, are in [`results-summary/`](results-summary/summary.md).
+
+## Caveats
+
+- One model (gpt-oss-120b, reasoning effort medium, temperature 0). Other models may behave differently on the same providers.
+- One vantage point: GitHub-hosted US runners. Connection setup was 70–170 ms for every provider, so network time doesn't explain the differences.
+- Low request rate. This measures what a single client sees, not throughput under heavy load.
+- Prices in `bench/providers.yaml` were the listed prices at the time; effective $/M is computed from them.
+- A personal project, not affiliated with or funded by any provider.
+
+## How it worked
+
+Each run, every provider received the same requests in parallel. Within a provider, requests ran one at a time, so the benchmark never queued its own traffic. Every prompt started with a random request ID, so no provider could serve a cached prefix.
+
+| Test | Shape | Per run | Graded on |
 |---|---|---|---|
 | short | ~60-token prompt → ~200-word answer | 5 | non-empty answer |
 | medium | ~2K-token log dump → ~400-word summary | 3 | non-empty answer |
@@ -14,76 +100,61 @@ Providers: Together, Fireworks, Baseten, DeepInfra, Cerebras, and OpenRouter (pi
 | tool | natural-language command, 2 tools offered | 3 | right tool **and** exact args |
 | long | ~32K-token log dump with a hidden "needle" | 2, every 6th run | needle code returned |
 
-Every prompt starts with a random request ID, so no provider can serve a cached prefix.
+Runs were triggered every 30 minutes by cron-job.org calling GitHub's workflow-dispatch API, since GitHub's own scheduler drifts by hours. Each run committed its results to the `data` branch as one JSONL file.
 
-## What gets logged (one JSONL row per request)
+### What each row records
 
-- **Latency**:
-  - `ttft_s`: first token of any kind, including reasoning
-  - `ttfa_s`: first visible answer token
-  - `tpot_ms`, `output_tps`, `e2e_s`
-- **Tokens and cost**: input/output/reasoning tokens from the provider's `usage`, and `cost_usd` from the prices in `providers.yaml`
-- **Errors**: `rate_limited`, `billing`, `auth`, `server_error`, `client_error`, `timeout`, `network`, `stream_error`, `empty_output`; plus `truncated` (hit max_tokens)
-- **Correctness**: `check_pass`, plus per-test detail (`schema_valid`, `fields_correct`, `tool_name_ok`, `tool_args_ok`)
-- **Network**: `tcp_ms` / `tls_ms` from a bare handshake per provider per run, to separate network time from server time
+- **Latency:** `ttft_s` (first token of any kind, including reasoning), `ttfa_s` (first visible answer token), `tpot_ms`, `output_tps`, `e2e_s`
+- **Tokens and cost:** input, output and reasoning tokens from the provider's `usage`, and `cost_usd` from `providers.yaml`
+- **Errors:** `rate_limited`, `billing`, `auth`, `server_error`, `client_error`, `timeout`, `network`, `stream_error`, `empty_output`, plus `truncated`
+- **Correctness:** `check_pass`, plus per-test detail (`json_strict`, `schema_valid`, `fields_correct`, `tool_name_ok`, `tool_args_ok`)
+- **Network:** `tcp_ms` / `tls_ms` from a bare handshake per provider per run
+- **Routing:** `upstream`, the provider OpenRouter actually used (Together for every request)
 
-## Setup
+### Repo layout
 
-1. **Create a private repo** and push this folder to `main`.
+```
+bench/run.py                  one benchmark pass → results/<date>/<time>_<run>.jsonl
+bench/prompts.py              the test suite
+bench/providers.yaml          endpoints, model IDs and prices
+bench/analyze.py              DuckDB analysis → summary.md + CSVs
+bench/repro_structured.py     standalone structured-output repro
+.github/workflows/bench.yml   the scheduled job
+results-summary/              final tables for the study window
+data branch                   raw results, one JSONL per run
+```
 
-2. **Create the results branch** (one time). Results are committed there so `main` stays clean:
+## Reproducing
+
+**Re-run the analysis** on the raw data:
+
+```bash
+pip install -r requirements.txt -r requirements-analysis.txt
+git fetch origin data && git worktree add data origin/data
+python bench/analyze.py --results data/results --out analysis --since 2026-10-26T04:00
+```
+
+`--since` excludes six setup runs from before the study started.
+
+**Reproduce the structured-output finding** (a few cents per provider):
+
+```bash
+export TOGETHER_API_KEY=...       # and/or DEEPINFRA_API_KEY, FIREWORKS_API_KEY
+python bench/repro_structured.py --provider together --n 50
+python bench/repro_structured.py --provider together,deepinfra,fireworks --n 20 --save outputs.jsonl
+```
+
+**Run the benchmark yourself:**
+
+1. Fork the repo and create a `data` branch:
    ```bash
    git checkout --orphan data
    git rm -rf . && mkdir results && touch results/.keep
    git add results && git commit -m "init data branch" && git push origin data
    git checkout main
    ```
+2. Add repository secrets for the providers you want: `TOGETHER_API_KEY`, `FIREWORKS_API_KEY`, `BASETEN_API_KEY`, `DEEPINFRA_API_KEY`, `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`. Providers without a key are skipped. Optionally add `NTFY_TOPIC` for phone alerts on outages and auth or billing failures.
+3. Check the model IDs and prices in `bench/providers.yaml`.
+4. Run the workflow once from the Actions tab, then schedule it. Any scheduler that can call the [workflow-dispatch API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event) works.
 
-3. **Add six repository secrets** (Settings → Secrets and variables → Actions):
-   - `TOGETHER_API_KEY`
-   - `FIREWORKS_API_KEY`
-   - `BASETEN_API_KEY`
-   - `DEEPINFRA_API_KEY`
-   - `CEREBRAS_API_KEY`
-   - `OPENROUTER_API_KEY`
-
-4. **Verify** `bench/providers.yaml`: model IDs, prices, and the OpenRouter upstream slug against each provider's docs.
-
-5. **Dry run locally first** (see below), then trigger the workflow manually from the Actions tab, then set up the cron-job.org trigger.
-
-## Local dry run
-
-```bash
-pip install -r requirements.txt -r requirements-analysis.txt
-export TOGETHER_API_KEY=...   # etc.
-python bench/run.py --tests short,tool        # quick, cheap
-python bench/run.py --long                    # full suite incl. 32K context
-python bench/analyze.py --results results --out analysis
-```
-
-What to check in the dry-run output:
-
-- **Every provider shows N/N ok.** A `client_error` with a 400 usually means a parameter that provider rejects. Most likely `reasoning_effort`, `response_format`, or `stream_options`; read `error_detail`.
-- **`reason tok` is sensible.** This drives cost. Over ~1,000 means medium effort is running long.
-- **Long-context `input_tokens` is near 32K.** If not, adjust `TOKENS_PER_LOG_LINE` in `prompts.py`.
-- **Runtime of the slowest provider.** That's the job's runtime.
-
-## Analysis
-
-```bash
-git fetch origin data && git worktree add data origin/data
-python bench/analyze.py --results data/results --out analysis
-```
-
-This writes `analysis/summary.md` plus one CSV per table:
-- latency/throughput percentiles
-- correctness rates
-- errors by type
-- cost and effective $/M
-- p95 TTFT by hour of day
-- connect time vs. TTFT
-
-## Budget
-
-- **API spend:** about 7.9M input + 2.8M output tokens per provider per week, which is $2–5 per provider at listed prices.
-- **Actions minutes:** each run takes as long as the slowest provider. 336 runs × ~3–5 min is ~1,000–1,700 min, which is near the 2,000 free minutes for a private repo. If dry runs show >5 min per run, make the repo public (unlimited minutes) or change the cron to hourly.
+A week costs about $2–5 per provider at the listed prices, and each run takes 2–5 minutes of Actions time, depending on the slowest provider.

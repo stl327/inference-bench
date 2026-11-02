@@ -1,0 +1,7 @@
+provider,requests,input_tok,output_tok,reasoning_tok_p50,cost_usd,effective_usd_per_m
+cerebras,4844,6847823.0,3264883.0,82.0,4.85,0.479
+together,4844,6648705.0,3450499.0,74.0,3.07,0.304
+openrouter,4844,6613476.0,3452130.0,75.0,3.06,0.304
+fireworks,4844,6847519.0,3009652.0,50.0,2.83,0.287
+baseten,4844,6783050.0,2975971.0,0.0,2.17,0.222
+deepinfra,4844,6157849.0,3120893.0,,1.71,0.186
