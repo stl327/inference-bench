@@ -1,10 +1,10 @@
 # inference-bench
 
-A week-long benchmark of six serverless inference providers serving the same open-weight model, **gpt-oss-120b**. From October 26 to November 1, 2026, a GitHub Actions job sent an identical set of requests to each provider every 30 minutes and logged latency, throughput, errors, correctness and cost.
+A week-long benchmark of six inference endpoints serving the same open-weight model, **gpt-oss-120b**: five serverless providers, plus OpenRouter pinned to one of them. From October 25 to November 1, 2026 (Pacific time; October 26 04:00 to November 2 04:35 UTC), a GitHub Actions job sent an identical set of requests to each endpoint every 30 minutes and logged latency, throughput, errors, correctness and cost.
 
 **Providers:** Together, Fireworks, Baseten, DeepInfra, Cerebras, and OpenRouter (pinned to Together with fallbacks off, to measure routing overhead).
 
-**Scale:** 338 runs, 29,064 requests (4,844 per provider), $17.68 total API spend.
+**Scale:** 338 runs, 29,064 requests (4,844 per endpoint), about $18 in estimated API usage ($17.68, computed from recorded token usage and the listed prices in `bench/providers.yaml`).
 
 The study is finished; the schedule and API keys are gone. Everything needed to reproduce it is in this repo.
 
@@ -12,33 +12,34 @@ The study is finished; the schedule and API keys are gone. Everything needed to 
 
 ### Structured output: the headline finding
 
-The same JSON-schema request (`response_format: json_schema`, `strict: true`, `additionalProperties: false`), about 1,000 times per provider:
+The same extraction request about 1,000 times per endpoint. The schema was supplied only through `response_format` (`json_schema`, `strict: true`, `additionalProperties: false`), with no schema text in the prompt. "Correct" means a single JSON object that passes the schema with every field matching the ticket; requests that returned API errors are excluded.
 
-| Provider | Correct | Wrong values | Text after the JSON object |
+| Endpoint | Correct | Wrong values | Not a single valid JSON object |
 |---|---|---|---|
 | Fireworks | 100% | 0 / 1,014 | 0 |
 | Baseten | 100% | 0 / 1,007 | 0 |
 | Cerebras | 100% | 0 / 1,008 | 0 |
 | DeepInfra | 63% | 270 / 910 (30%) | 7% |
 | Together | 16% | 135 / 1,006 (13%) | 72% |
-| OpenRouter → Together | 20% | 123 / 1,008 (12%) | 70% |
+| OpenRouter → Together | 19% | 123 / 1,008 (12%) | 70% |
 
-Every wrong value had the same shape: the correct digits followed by extra zeros (8 → 80, 16 → 1600, 64 → 640, 128 → 1280, 256 → 2560). The other fields were always right, and the output still passes schema validation, so an application can't detect the error.
+Almost every wrong value had the same shape: the correct digits followed by extra zeros (8 → 80, 16 → 1600, 64 → 640, 128 → 1280, 256 → 2560). The one exception was a DeepInfra response that returned 16016 for 16. Of the wrong-value responses, 270 of 270 (DeepInfra), 122 of 135 (Together) and 107 of 123 (OpenRouter) were otherwise valid, schema-conforming JSON, so schema validation alone would not have caught them: 1280 is a valid integer even when the ticket says 128.
 
-A follow-up repro ([`bench/repro_structured.py`](bench/repro_structured.py)) isolated the trigger. On these two endpoints, the schema is only reliable when it's also described in the prompt, which Together's docs recommend:
+A follow-up repro ([`bench/repro_structured.py`](bench/repro_structured.py)) tested the same request with and without the schema also written into a system prompt, which [Together's docs](https://docs.together.ai/docs/inference/chat/structured-outputs) recommend. Adding it eliminated the failures in these follow-up tests. Two runs:
 
-| Provider | Schema also in system prompt | Schema only in `response_format` |
-|---|---|---|
-| Together | 100 / 100 correct | 9 / 100 correct |
-| DeepInfra | 52 / 52 correct | 35 / 62 correct |
+| Run | Provider | Schema also in system prompt | Schema only in `response_format` | Evidence |
+|---|---|---|---|---|
+| 1 | Together | 100 / 100 correct | 9 / 100 correct | [terminal output](results-summary/repro/run1_terminal_output.png) only |
+| 1 | DeepInfra | 52 / 52 correct | 35 / 62 correct | [terminal output](results-summary/repro/run1_terminal_output.png) only |
+| 2 | Together | 40 / 40 correct | 7 / 40 correct | [full requests and responses](results-summary/repro/run2_together_outputs.jsonl), with Together response IDs |
 
-Results were the same with and without streaming. Fireworks, Baseten and Cerebras returned correct output without the prompt hint. Both affected providers were sent these findings before publication.
+Run 1 was printed to the terminal without saving raw responses, so only its summary output is available; run 2 saved everything. DeepInfra's counts exclude requests rejected with 429. Both runs graded JSON parsing and extracted values; the script now also runs full JSON Schema validation. Results were the same with and without streaming. Fireworks, Baseten and Cerebras returned correct output without the prompt hint. Both affected providers were sent these findings before publication.
 
-Tool calling was 100% correct on every provider, and the 32K-token needle test was 100% on every provider except Fireworks (99%, one miss).
+Tool calling was 100% correct on every endpoint, and the 32K-token needle test was 100% on every endpoint except Fireworks (99%, one miss).
 
 ### Speed and cost
 
-Short test, ~4,800 requests per provider. "Answer" is the time to the first visible answer token, after any reasoning.
+Short test, 1,690 requests per endpoint. "Answer" is the time to the first visible answer token, after any reasoning. Output tok/s counts all completion tokens the provider reports, including reasoning, over the generation time; it is not the same as total response time. Effective $/M is cost per million input plus output tokens across all tests.
 
 | Provider | Answer p50 | Answer p99 | Output tok/s (p50) | Effective $ / M tokens |
 |---|---|---|---|---|
@@ -60,23 +61,23 @@ No retries, so every failed request counts. "Runs hit" is the number of runs (of
 | Cerebras | 0.60% | 7 | "high traffic" 429s |
 | OpenRouter → Together | 0.68% | 8 | inherited Together's outages |
 | Together | 0.76% | 8 | one full outage (14 of 14 failed) |
-| DeepInfra | 9.93% | 99 | "Model busy" 429s (`engine_overloaded`) |
+| DeepInfra | 9.93% | 99 | 461 "Model busy" 429s (`engine_overloaded`), 20 empty responses |
 
-Load was about one request at a time per provider, so these reflect provider capacity, not account rate limits.
+Error rates cover API and request errors across all tests; they don't include wrong answers. Load was about one request at a time per endpoint, so the 429s reflect provider capacity rather than account rate limits.
 
 ### Load: weekday vs. weekend
 
-Median output tok/s on the short test during US business hours (8 AM–4 PM Pacific):
+Median output tok/s on successful short-test requests between 8 AM and 4 PM Pacific (America/Los_Angeles, so it follows the November 1 daylight-saving change):
 
 | Provider | Weekday | Weekend | Change |
 |---|---|---|---|
-| Together | 89 | 127 | +43% |
-| Fireworks | 205 | 252 | +23% |
-| Baseten | 162 | 198 | +22% |
-| DeepInfra | 37 | 39 | +5% |
-| Cerebras | 1,587 | 1,573 | −1% |
+| Together | 89 | 127 | +42% |
+| Fireworks | 203 | 252 | +25% |
+| Baseten | 160 | 195 | +22% |
+| DeepInfra | 37 | 38 | +3% |
+| Cerebras | 1,582 | 1,562 | −1% |
 
-This rests on a single weekend (which included Halloween), so treat it as directional.
+Cerebras's weekday and weekend medians were nearly the same, which doesn't mean its speed was constant through the week. This rests on a single weekend (which included Halloween), so treat it as directional.
 
 Full tables, including percentiles per test, errors by type and TTFT by hour, are in [`results-summary/`](results-summary/summary.md).
 
@@ -85,12 +86,13 @@ Full tables, including percentiles per test, errors by type and TTFT by hour, ar
 - One model (gpt-oss-120b, reasoning effort medium, temperature 0). Other models may behave differently on the same providers.
 - One vantage point: GitHub-hosted US runners. Connection setup was 70–170 ms for every provider, so network time doesn't explain the differences.
 - Low request rate. This measures what a single client sees, not throughput under heavy load.
+- Structured-output results are for one configuration: schema in `response_format` only. Providers that recommend also putting the schema in the prompt may do better when you follow that advice.
 - Prices in `bench/providers.yaml` were the listed prices at the time; effective $/M is computed from them.
 - A personal project, not affiliated with or funded by any provider.
 
 ## How it worked
 
-Each run, every provider received the same requests in parallel. Within a provider, requests ran one at a time, so the benchmark never queued its own traffic. Every prompt started with a random request ID, so no provider could serve a cached prefix.
+Each run, every endpoint received the same requests in parallel. Within a provider, requests ran one at a time, so the benchmark never queued its own traffic. Every prompt started with a random request ID, so no provider could serve a cached prefix.
 
 | Test | Shape | Per run | Graded on |
 |---|---|---|---|
@@ -119,6 +121,7 @@ bench/prompts.py              the test suite
 bench/providers.yaml          endpoints, model IDs and prices
 bench/analyze.py              DuckDB analysis → summary.md + CSVs
 bench/repro_structured.py     standalone structured-output repro
+results-summary/repro/        follow-up repro evidence (run 1 output, run 2 raw responses)
 .github/workflows/bench.yml   the scheduled job
 results-summary/              final tables for the study window
 data branch                   raw results, one JSONL per run
@@ -134,7 +137,7 @@ git fetch origin data && git worktree add data origin/data
 python bench/analyze.py --results data/results --out analysis --since 2026-10-26T04:00
 ```
 
-`--since` excludes six setup runs from before the study started.
+`--since` excludes six setup runs from before the study started. The weekday/weekend table above was computed separately in Pacific time; `analyze.py` groups by UTC hour.
 
 **Reproduce the structured-output finding** (a few cents per provider):
 

@@ -114,7 +114,9 @@ def call(client, url, headers, body):
 
 
 def grade(text, truth):
-    """ok | wrong_value | extra_text | unparseable, plus the returned gpu_count."""
+    """ok | wrong_value | extra_text | schema_invalid | unparseable, plus the returned gpu_count.
+    "ok" requires a single JSON object that passes the full JSON Schema (install
+    jsonschema for that check) with every value matching the ticket."""
     try:
         obj = json.loads(text)
         strict_ok = True
@@ -126,8 +128,23 @@ def grade(text, truth):
             return "unparseable", None
     if not isinstance(obj, dict):
         return "unparseable", None
+    try:
+        import jsonschema
+        jsonschema.validate(obj, SCHEMA)
+        schema_ok = True
+    except ImportError:
+        schema_ok = True  # jsonschema not installed: value checks only
+    except Exception:
+        schema_ok = False
     values_ok = all(obj.get(k) == v for k, v in truth.items())
-    verdict = "wrong_value" if not values_ok else ("ok" if strict_ok else "extra_text")
+    if not values_ok:
+        verdict = "wrong_value"
+    elif not strict_ok:
+        verdict = "extra_text"
+    elif not schema_ok:
+        verdict = "schema_invalid"
+    else:
+        verdict = "ok"
     return verdict, obj.get("gpu_count")
 
 
@@ -139,11 +156,11 @@ def run_provider(name, prov, configs, n, seed, save=None):
     url = prov["base_url"].rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {key}"}
     print(f"\n=== {name} ({prov['model']}) ===")
-    print(f"{'config':<23} {'ok':>4} {'wrong':>6} {'extra':>6} {'other':>6}   wrong values by true gpu_count")
+    print(f"{'config':<23} {'ok':>4} {'wrong':>6} {'extra':>6} {'schema':>7} {'other':>6}   wrong values by true gpu_count")
     with httpx.Client(timeout=120) as client:
         for cname, cfg in configs.items():
             rng = random.Random(seed)  # same tickets for every config and provider
-            tally = {"ok": 0, "wrong_value": 0, "extra_text": 0, "other": 0}
+            tally = {"ok": 0, "wrong_value": 0, "extra_text": 0, "schema_invalid": 0, "other": 0}
             wrong_by_count, examples = {}, []
             for _ in range(n):
                 truth, text = make_ticket(rng)
@@ -171,7 +188,7 @@ def run_provider(name, prov, configs, n, seed, save=None):
                     examples.append(f"(true {truth['gpu_count']}) " + " ".join(out.split())[:140])
             by = ", ".join(f"{k}->{sorted(set(map(str, v)))}" for k, v in sorted(wrong_by_count.items()))
             print(f"{cname:<23} {tally['ok']:>4} {tally['wrong_value']:>6} {tally['extra_text']:>6} "
-                  f"{tally['other']:>6}   {by or '-'}")
+                  f"{tally['schema_invalid']:>7} {tally['other']:>6}   {by or '-'}")
             for ex in examples:
                 print(f"    e.g. {ex}")
 
