@@ -25,7 +25,7 @@ The same extraction request about 1,000 times per endpoint. The schema was suppl
 
 Almost every wrong value had the same shape: the correct digits followed by extra zeros (8 → 80, 16 → 1600, 64 → 640, 128 → 1280, 256 → 2560). The one exception was a DeepInfra response that returned 16016 for 16. Of the wrong-value responses, 270 of 270 (DeepInfra), 122 of 135 (Together) and 107 of 123 (OpenRouter) were otherwise valid, schema-conforming JSON, so schema validation alone would not have caught them: 1280 is a valid integer even when the ticket says 128.
 
-A follow-up repro ([`bench/repro_structured.py`](bench/repro_structured.py)) tested the same request with and without the schema also written into a system prompt, which [Together's docs](https://docs.together.ai/docs/inference/chat/structured-outputs) recommend. Adding it eliminated the failures in these follow-up tests. Two runs:
+A follow-up repro ([`bench/repro_structured.py`](bench/repro_structured.py)) tested the same request with and without the schema also written into a system prompt, which [Together's docs](https://docs.together.ai/docs/inference/chat/structured-outputs) recommend. Adding it eliminated the extraction errors in every response that completed. Two runs:
 
 | Run | Provider | Schema also in system prompt | Schema only in `response_format` | Evidence |
 |---|---|---|---|---|

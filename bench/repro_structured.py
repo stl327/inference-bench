@@ -25,6 +25,7 @@ import random
 import uuid
 
 import httpx
+import jsonschema  # required: "ok" means the full JSON Schema passed (pip install jsonschema)
 
 PROVIDERS = {
     "together":  dict(base_url="https://api.together.xyz/v1",
@@ -115,8 +116,8 @@ def call(client, url, headers, body):
 
 def grade(text, truth):
     """ok | wrong_value | extra_text | schema_invalid | unparseable, plus the returned gpu_count.
-    "ok" requires a single JSON object that passes the full JSON Schema (install
-    jsonschema for that check) with every value matching the ticket."""
+    "ok" requires a single JSON object that passes the full JSON Schema with every
+    value matching the ticket."""
     try:
         obj = json.loads(text)
         strict_ok = True
@@ -129,12 +130,9 @@ def grade(text, truth):
     if not isinstance(obj, dict):
         return "unparseable", None
     try:
-        import jsonschema
         jsonschema.validate(obj, SCHEMA)
         schema_ok = True
-    except ImportError:
-        schema_ok = True  # jsonschema not installed: value checks only
-    except Exception:
+    except jsonschema.ValidationError:
         schema_ok = False
     values_ok = all(obj.get(k) == v for k, v in truth.items())
     if not values_ok:
